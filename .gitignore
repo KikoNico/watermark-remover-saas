@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Node.js
+node_modules/
+.next/
+out/
+.vercel/
+npm-debug.log*
+
+# Environment
+.env.local
+.env.*.local
+
+# Models cache
+.cache/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Videos (don't commit user uploads)
+/tmp/
