@@ -2,11 +2,9 @@ torch==2.1.1
 torchvision==0.16.1
 transformers==4.48.0
 timm==0.9.12
-pillow==10.1.0
+pillow>=10.0.0
 numpy==1.26.2
 opencv-python==4.8.1.78
 redis==5.0.1
 python-dotenv==1.0.0
-simple-lama-inpainting==0.1.2
-ffmpeg-python==0.2.0
 einops==0.7.0
