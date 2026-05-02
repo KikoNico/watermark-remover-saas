@@ -189,9 +189,34 @@ def process_job(
         stdout=subprocess.DEVNULL,
     )
 
+    import queue
+    import threading
+
     stderr_lines = []
+    line_queue: queue.Queue = queue.Queue()
+
+    def _read_stderr():
+        try:
+            for raw in proc.stderr:
+                line_queue.put(raw)
+        finally:
+            line_queue.put(None)  # sentinel
+
+    reader = threading.Thread(target=_read_stderr, daemon=True)
+    reader.start()
+
     try:
-        for raw_line in proc.stderr:
+        while True:
+            try:
+                raw_line = line_queue.get(timeout=0.5)
+            except queue.Empty:
+                if proc.poll() is not None:
+                    break
+                continue
+
+            if raw_line is None:
+                break
+
             line = raw_line.decode(errors="replace").strip()
             stderr_lines.append(line)
             if line.startswith("out_time_ms="):
