@@ -159,14 +159,16 @@ export default function ZoneSelector({ frames, videoWidth, videoHeight, onConfir
           onLoad={updateImgSize}
         />
 
-        {/* Saved zones — blurred preview */}
-        {imgWidth > 0 && zones.filter((z) => z.state === 'saved').map((z) => (
+        {/* All zones — blurred preview with border by state */}
+        {imgWidth > 0 && zones.map((z) => (
           <div
             key={z.id}
-            className="absolute border-2 border-blue-400 overflow-hidden cursor-pointer"
-            style={{ left: z.x, top: z.y, width: z.w, height: z.h, isolation: 'isolate' }}
-            onMouseDown={(e) => { e.stopPropagation(); editZone(z.id) }}
-            title="Clic para editar"
+            className={`absolute border-2 overflow-hidden cursor-pointer ${
+              z.state === 'editing' ? 'border-yellow-400' : 'border-blue-400'
+            }`}
+            style={{ left: z.x, top: z.y, width: z.w, height: z.h }}
+            onMouseDown={(e) => { e.stopPropagation(); if (z.state === 'saved') editZone(z.id) }}
+            title={z.state === 'saved' ? 'Clic para editar' : undefined}
           >
             <img
               src={currentFrame}
@@ -184,15 +186,6 @@ export default function ZoneSelector({ frames, videoWidth, videoHeight, onConfir
             />
           </div>
         ))}
-
-        {/* Editing zone — yellow border, no blur preview */}
-        {editingZone && (
-          <div
-            className="absolute border-2 border-yellow-400 bg-yellow-400/10 cursor-pointer"
-            style={{ left: editingZone.x, top: editingZone.y, width: editingZone.w, height: editingZone.h }}
-            onMouseDown={(e) => e.stopPropagation()}
-          />
-        )}
 
         {/* Zone being drawn */}
         {drawRect && (
