@@ -9,7 +9,12 @@ class WatermarkDetector:
     MODEL_ID = "microsoft/Florence-2-large"
 
     def __init__(self):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            self.device = "cuda"
+        elif torch.backends.mps.is_available():
+            self.device = "mps"
+        else:
+            self.device = "cpu"
         dtype = torch.float16 if USE_FP16 and self.device == "cuda" else torch.float32
 
         print(f"Loading Florence-2 on {self.device} ({dtype})...")

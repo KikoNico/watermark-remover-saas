@@ -110,6 +110,119 @@ def has_watermark(video_path: str, detector: WatermarkDetector, total_frames: in
     return found
 
 
+import queue as _queue
+import threading
+
+
+def _process_with_zones(
+    r: redis.Redis,
+    job_id: str,
+    video_path: str,
+    output_path: str,
+    zones: list,
+    info: dict,
+) -> None:
+    """Fast path: single FFmpeg pass blurring pre-defined zones."""
+    vid_w, vid_h = info["width"], info["height"]
+    total_frames = max(info["total_frames"], 1)
+    total_seconds = max(total_frames / max(info["fps"], 1), 1)
+
+    clean_zones = []
+    for z in zones:
+        x = max(0, z["x"])
+        y = max(0, z["y"])
+        w = min(vid_w - x, z["w"])
+        h = min(vid_h - y, z["h"])
+        w = w if w % 2 == 0 else w + 1
+        h = h if h % 2 == 0 else h + 1
+        w = min(vid_w - x, w)
+        h = min(vid_h - y, h)
+        if w > 0 and h > 0:
+            clean_zones.append({"x": x, "y": y, "w": w, "h": h})
+
+    if not clean_zones:
+        log.info(f"Job {job_id[:8]}… no valid zones — copying original.")
+        shutil.copy2(video_path, output_path)
+        return
+
+    n = len(clean_zones)
+    parts = [f"[0:v]split={n + 1}" + "".join(f"[s{i}]" for i in range(n + 1))]
+    for i, z in enumerate(clean_zones):
+        parts.append(f"[s{i + 1}]crop={z['w']}:{z['h']}:{z['x']}:{z['y']},boxblur=20:5[b{i}]")
+    for i, z in enumerate(clean_zones):
+        src = "s0" if i == 0 else f"t{i - 1}"
+        dst = f"t{i}" if i < n - 1 else "out"
+        parts.append(f"[{src}][b{i}]overlay={z['x']}:{z['y']}[{dst}]")
+    blur_filter = ";".join(parts)
+
+    log.info(f"Job {job_id[:8]}… blurring {n} zone(s) with FFmpeg.")
+    update_status(r, job_id, "processing", progress=5)
+
+    if sys.platform == "darwin":
+        video_codec = ["-c:v", "h264_videotoolbox", "-b:v", "8000k"]
+    else:
+        video_codec = ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    proc = subprocess.Popen(
+        [
+            "ffmpeg", "-y", "-i", video_path,
+            "-filter_complex", blur_filter,
+            "-map", "[out]",
+            "-map", "0:a?",
+            *video_codec,
+            "-c:a", "copy",
+            "-pix_fmt", "yuv420p",
+            "-progress", "pipe:2",
+            output_path,
+        ],
+        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+    )
+
+    stderr_lines = []
+    line_queue: _queue.Queue = _queue.Queue()
+
+    def _read_stderr():
+        try:
+            for raw in proc.stderr:
+                line_queue.put(raw)
+        finally:
+            line_queue.put(None)
+
+    threading.Thread(target=_read_stderr, daemon=True).start()
+
+    while True:
+        try:
+            raw_line = line_queue.get(timeout=0.5)
+        except _queue.Empty:
+            if proc.poll() is not None:
+                break
+            continue
+        if raw_line is None:
+            break
+        line = raw_line.decode(errors="replace").strip()
+        stderr_lines.append(line)
+        if line.startswith("out_time_ms="):
+            try:
+                current_s = int(line.split("=")[1]) / 1_000_000
+                pct = 5 + int((current_s / total_seconds) * 94)
+                update_status(r, job_id, "processing", progress=min(pct, 99))
+            except ValueError:
+                pass
+        if is_cancelled(r, job_id):
+            proc.kill()
+            proc.wait()
+            raise JobCancelledError()
+
+    proc.wait()
+    if proc.returncode != 0:
+        err = "\n".join(stderr_lines[-30:])
+        raise RuntimeError(f"FFmpeg blur failed: {err}")
+
+    log.info(f"Job {job_id[:8]}… complete — saved to {output_path}")
+
+
 def process_job(
     r: redis.Redis,
     job_id: str,
@@ -124,11 +237,19 @@ def process_job(
 
     log.info(f"Processing: {video_path}")
     info = VideoProcessor.get_video_info(video_path)
+
+    # Fast path: zones were pre-defined by the user
+    raw = r.get(f"{JOB_KEY_PREFIX}{job_id}")
+    zones = json.loads(raw).get("zones") if raw else None
+    if zones:
+        _process_with_zones(r, job_id, video_path, output_path, zones, info)
+        return
+
     total_frames = max(info["total_frames"], 1)
     fps = max(info["fps"], 1)
     width, height = info["width"], info["height"]
 
-    # Quick check: skip full processing if no watermark at all
+    # Fallback: frame-by-frame Florence-2 detection
     update_status(r, job_id, "processing", progress=3)
     if is_cancelled(r, job_id):
         raise JobCancelledError()
@@ -141,8 +262,8 @@ def process_job(
 
     update_status(r, job_id, "processing", progress=5)
 
-    # Detect every ~1 second of video
-    detection_interval = max(1, int(fps))
+    # Detect every ~2 seconds of video
+    detection_interval = max(1, int(fps * 2))
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")

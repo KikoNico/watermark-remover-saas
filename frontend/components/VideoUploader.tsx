@@ -77,7 +77,7 @@ export default function VideoUploader({ onUpload }: Props) {
       if (onUpload) {
         onUpload(result.job_id)
       } else {
-        router.push(`/status/${result.job_id}`)
+        router.push(`/zones/${result.job_id}`)
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Error al subir el vídeo. Inténtalo de nuevo.')

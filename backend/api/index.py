@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import upload, status, download, cancel
+from api.routes import upload, status, download, cancel, frame, start
 from api.services.storage import ensure_storage_dir
 
 
@@ -32,6 +32,8 @@ app.include_router(upload.router, prefix="/api")
 app.include_router(status.router, prefix="/api")
 app.include_router(download.router, prefix="/api")
 app.include_router(cancel.router, prefix="/api")
+app.include_router(frame.router, prefix="/api")
+app.include_router(start.router, prefix="/api")
 
 
 @app.get("/api/health")

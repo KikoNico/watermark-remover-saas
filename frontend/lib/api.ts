@@ -16,6 +16,47 @@ export interface StatusResponse {
   error: string | null
 }
 
+export interface FrameResponse {
+  frame_base64: string
+  video_width: number
+  video_height: number
+}
+
+export interface Zone {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export async function getJobFrame(
+  jobId: string
+): Promise<{ url: string; videoWidth: number; videoHeight: number }> {
+  const res = await fetch(`${API_URL}/api/jobs/${jobId}/frame`)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(err.detail || `HTTP ${res.status}`)
+  }
+  const data: FrameResponse = await res.json()
+  return {
+    url: `data:image/jpeg;base64,${data.frame_base64}`,
+    videoWidth: data.video_width,
+    videoHeight: data.video_height,
+  }
+}
+
+export async function startJob(jobId: string, zones: Zone[]): Promise<void> {
+  const res = await fetch(`${API_URL}/api/jobs/${jobId}/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ zones }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(err.detail || `HTTP ${res.status}`)
+  }
+}
+
 export async function cancelJob(jobId: string): Promise<void> {
   const res = await fetch(`${API_URL}/api/cancel/${jobId}`, { method: 'DELETE' })
   if (!res.ok) {
