@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { use } from 'react'
 import { AlertCircle } from 'lucide-react'
 import ZoneSelector from '@/components/ZoneSelector'
-import { getJobFrame, startJob, Zone } from '@/lib/api'
+import { getJobFrames, startJob, Zone } from '@/lib/api'
 
 interface Props {
   params: Promise<{ jobId: string }>
@@ -16,7 +16,7 @@ export default function ZonesPage({ params }: Props) {
   const router = useRouter()
 
   const [frameData, setFrameData] = useState<{
-    url: string
+    frames: string[]
     videoWidth: number
     videoHeight: number
   } | null>(null)
@@ -24,7 +24,7 @@ export default function ZonesPage({ params }: Props) {
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    getJobFrame(jobId)
+    getJobFrames(jobId, 10)
       .then((data) => setFrameData(data))
       .catch((err: Error) => setError(err.message))
   }, [jobId])
@@ -46,8 +46,8 @@ export default function ZonesPage({ params }: Props) {
         <div className="text-center">
           <h1 className="text-3xl font-bold text-white">Marca las zonas a desenfocar</h1>
           <p className="mt-2 text-sm text-gray-400">
-            Arrastra sobre el frame para seleccionar dónde aparece la marca de agua.
-            Puedes marcar varias zonas.
+            Arrastra sobre el frame para marcar dónde aparece la marca de agua.
+            Navega por los frames para verla en distintos momentos del vídeo.
           </p>
         </div>
 
@@ -55,16 +55,19 @@ export default function ZonesPage({ params }: Props) {
           <div className="flex items-start gap-2 rounded-lg bg-red-950 border border-red-800 p-3 text-sm text-red-300">
             <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
             <span>{error}</span>
-          </div>
+        </div>
         )}
 
         {!frameData && !error && (
-          <div className="text-center text-gray-400 py-16">Cargando frame del vídeo...</div>
+          <div className="text-center text-gray-400 py-16">
+            <p>Extrayendo frames del vídeo...</p>
+            <p className="text-xs mt-1 text-gray-600">Esto puede tardar unos segundos</p>
+          </div>
         )}
 
         {frameData && (
           <ZoneSelector
-            frameUrl={frameData.url}
+            frames={frameData.frames}
             videoWidth={frameData.videoWidth}
             videoHeight={frameData.videoHeight}
             onConfirm={handleConfirm}

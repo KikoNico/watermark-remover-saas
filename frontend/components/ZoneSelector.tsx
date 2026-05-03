@@ -20,7 +20,7 @@ interface DrawingState {
 }
 
 interface Props {
-  frameUrl: string
+  frames: string[]
   videoWidth: number
   videoHeight: number
   onConfirm: (zones: Zone[]) => void
@@ -29,13 +29,16 @@ interface Props {
 
 const DEFAULT_BLUR = 20
 
-export default function ZoneSelector({ frameUrl, videoWidth, videoHeight, onConfirm, loading }: Props) {
+export default function ZoneSelector({ frames, videoWidth, videoHeight, onConfirm, loading }: Props) {
   const imgRef = useRef<HTMLImageElement>(null)
   const [imgWidth, setImgWidth] = useState(0)
+  const [frameIndex, setFrameIndex] = useState(0)
   const [zones, setZones] = useState<DisplayZone[]>([])
   const [drawing, setDrawing] = useState<DrawingState | null>(null)
   const [activeId, setActiveId] = useState<number | null>(null)
   const nextId = useRef(0)
+
+  const currentFrame = frames[frameIndex] ?? frames[0]
 
   function getRelativeCoords(e: MouseEvent): { x: number; y: number } {
     const img = imgRef.current
@@ -114,7 +117,7 @@ export default function ZoneSelector({ frameUrl, videoWidth, videoHeight, onConf
 
   return (
     <div className="space-y-4">
-      {/* Frame + zones overlay */}
+      {/* Main frame + zone drawing */}
       <div
         className="relative w-full cursor-crosshair select-none"
         onMouseDown={onMouseDown}
@@ -124,14 +127,13 @@ export default function ZoneSelector({ frameUrl, videoWidth, videoHeight, onConf
       >
         <img
           ref={imgRef}
-          src={frameUrl}
+          src={currentFrame}
           alt="Frame del vídeo"
           className="w-full rounded-lg block"
           draggable={false}
           onLoad={() => setImgWidth(imgRef.current?.getBoundingClientRect().width ?? 0)}
         />
 
-        {/* Existing zones — show blurred preview */}
         {zones.map((z) => (
           <div
             key={z.id}
@@ -146,7 +148,7 @@ export default function ZoneSelector({ frameUrl, videoWidth, videoHeight, onConf
           >
             {imgWidth > 0 && (
               <img
-                src={frameUrl}
+                src={currentFrame}
                 alt=""
                 draggable={false}
                 style={{
@@ -162,7 +164,6 @@ export default function ZoneSelector({ frameUrl, videoWidth, videoHeight, onConf
           </div>
         ))}
 
-        {/* Zone being drawn */}
         {drawRect && (
           <div
             className="absolute border-2 border-dashed border-yellow-400 bg-yellow-400/10 pointer-events-none"
@@ -170,6 +171,33 @@ export default function ZoneSelector({ frameUrl, videoWidth, videoHeight, onConf
           />
         )}
       </div>
+
+      {/* Frame thumbnail strip */}
+      {frames.length > 1 && (
+        <div className="space-y-1">
+          <p className="text-xs text-gray-500">
+            Frame {frameIndex + 1} de {frames.length} — haz clic para navegar por el vídeo
+          </p>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {frames.map((f, i) => (
+              <button
+                key={i}
+                onClick={() => setFrameIndex(i)}
+                className={`flex-shrink-0 rounded overflow-hidden border-2 transition-colors ${
+                  i === frameIndex ? 'border-blue-400' : 'border-gray-700 hover:border-gray-500'
+                }`}
+              >
+                <img
+                  src={f}
+                  alt={`Frame ${i + 1}`}
+                  className="h-14 w-auto block"
+                  draggable={false}
+                />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Controls for selected zone */}
       {activeZone ? (
@@ -196,13 +224,12 @@ export default function ZoneSelector({ frameUrl, videoWidth, videoHeight, onConf
             <span className="text-xs text-gray-500">Fuerte</span>
             <span className="text-xs text-gray-400 w-6 text-right">{activeZone.blur}</span>
           </div>
-          <p className="text-xs text-gray-500">La vista previa se actualiza en tiempo real sobre el frame</p>
         </div>
       ) : (
         <p className="text-sm text-gray-400">
           {zones.length === 0
-            ? 'Arrastra para marcar zonas donde aparece la marca de agua'
-            : `${zones.length} zona${zones.length > 1 ? 's' : ''} — haz clic en una para ajustar su desenfoque`}
+            ? 'Arrastra para marcar zonas. Navega por los frames para ver dónde aparece la marca.'
+            : `${zones.length} zona${zones.length > 1 ? 's' : ''} marcada${zones.length > 1 ? 's' : ''} — haz clic en una para ajustar el desenfoque`}
         </p>
       )}
 

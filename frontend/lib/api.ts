@@ -30,17 +30,18 @@ export interface Zone {
   blur: number
 }
 
-export async function getJobFrame(
-  jobId: string
-): Promise<{ url: string; videoWidth: number; videoHeight: number }> {
-  const res = await fetch(`${API_URL}/api/jobs/${jobId}/frame`)
+export async function getJobFrames(
+  jobId: string,
+  count = 10
+): Promise<{ frames: string[]; videoWidth: number; videoHeight: number }> {
+  const res = await fetch(`${API_URL}/api/jobs/${jobId}/frames?count=${count}`)
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Unknown error' }))
     throw new Error(err.detail || `HTTP ${res.status}`)
   }
-  const data: FrameResponse = await res.json()
+  const data = await res.json()
   return {
-    url: `data:image/jpeg;base64,${data.frame_base64}`,
+    frames: (data.frames as string[]).map((b64) => `data:image/jpeg;base64,${b64}`),
     videoWidth: data.video_width,
     videoHeight: data.video_height,
   }
