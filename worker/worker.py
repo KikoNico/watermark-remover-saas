@@ -2,6 +2,7 @@ import glob as _glob
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -26,6 +27,10 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger(__name__)
+
+DETECTION_SAMPLES = 5       # frames for quick preliminary check
+BLUR_KERNEL = (51, 51)      # GaussianBlur kernel — must be odd
+BLUR_PAD = 10               # pixels of padding around detected bbox
 
 
 def get_input_path(job_id: str) -> str:
@@ -74,43 +79,35 @@ def is_cancelled(r: redis.Redis, job_id: str) -> bool:
     return json.loads(raw).get("status") == "cancelled"
 
 
-DETECTION_SAMPLES = 5  # number of frames to sample for watermark detection
+def _detect_bbox(frame: cv2.Mat, detector: WatermarkDetector, width: int, height: int):
+    """Run detection on a single frame. Returns (x, y, w, h) or None."""
+    mask = detector.detect(frame)
+    coords = cv2.findNonZero(mask)
+    if coords is None:
+        return None
+    x, y, w, h = cv2.boundingRect(coords)
+    x = max(0, x - BLUR_PAD)
+    y = max(0, y - BLUR_PAD)
+    w = min(width - x, w + BLUR_PAD * 2)
+    h = min(height - y, h + BLUR_PAD * 2)
+    return (x, y, w, h)
 
 
-def detect_watermark_bbox(
-    video_path: str,
-    detector: WatermarkDetector,
-    total_frames: int,
-) -> tuple[int, int, int, int] | None:
-    """
-    Sample a few frames, run detection, return union bounding box (x, y, w, h).
-    Returns None if no watermark found.
-    """
+def has_watermark(video_path: str, detector: WatermarkDetector, total_frames: int) -> bool:
+    """Sample DETECTION_SAMPLES frames. Returns True if any watermark found."""
     cap = cv2.VideoCapture(video_path)
-    x1_min, y1_min, x2_max, y2_max = float("inf"), float("inf"), 0, 0
-    found = False
-
     indices = [int(i * total_frames / DETECTION_SAMPLES) for i in range(DETECTION_SAMPLES)]
+    found = False
     for idx in indices:
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame = cap.read()
         if not ret:
             continue
-        mask = detector.detect(frame)
-        coords = cv2.findNonZero(mask)
-        if coords is None:
-            continue
-        found = True
-        fx, fy, fw, fh = cv2.boundingRect(coords)
-        x1_min = min(x1_min, fx)
-        y1_min = min(y1_min, fy)
-        x2_max = max(x2_max, fx + fw)
-        y2_max = max(y2_max, fy + fh)
-
+        if cv2.findNonZero(detector.detect(frame)) is not None:
+            found = True
+            break
     cap.release()
-    if not found:
-        return None
-    return int(x1_min), int(y1_min), int(x2_max - x1_min), int(y2_max - y1_min)
+    return found
 
 
 def process_job(
@@ -120,6 +117,7 @@ def process_job(
 ) -> None:
     video_path = get_input_path(job_id)
     output_path = get_output_path(job_id)
+    temp_path = output_path + ".tmp.mp4"
 
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Input video not found: {video_path}")
@@ -127,124 +125,103 @@ def process_job(
     log.info(f"Processing: {video_path}")
     info = VideoProcessor.get_video_info(video_path)
     total_frames = max(info["total_frames"], 1)
+    fps = max(info["fps"], 1)
+    width, height = info["width"], info["height"]
 
-    # Step 1: detect watermark on a few sample frames
-    update_status(r, job_id, "processing", progress=5)
+    # Quick check: skip full processing if no watermark at all
+    update_status(r, job_id, "processing", progress=3)
     if is_cancelled(r, job_id):
         raise JobCancelledError()
 
-    bbox = detect_watermark_bbox(video_path, detector, total_frames)
-    if bbox is None:
+    if not has_watermark(video_path, detector, total_frames):
         log.info(f"Job {job_id[:8]}… no watermark detected — copying original.")
-        import shutil
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
         shutil.copy2(video_path, output_path)
         return
 
-    x, y, w, h = bbox
-    vid_w, vid_h = info["width"], info["height"]
+    update_status(r, job_id, "processing", progress=5)
 
-    # Add 10px padding and clamp to video boundaries
-    pad = 10
-    x = max(0, x - pad)
-    y = max(0, y - pad)
-    w = min(vid_w - x, w + pad * 2)
-    h = min(vid_h - y, h + pad * 2)
-    # FFmpeg requires even dimensions
-    w = w if w % 2 == 0 else w + 1
-    h = h if h % 2 == 0 else h + 1
-    w = min(vid_w - x, w)
-    h = min(vid_h - y, h)
+    # Detect every ~1 second of video
+    detection_interval = max(1, int(fps))
 
-    log.info(f"Job {job_id[:8]}… delogo bbox: x={x} y={y} w={w} h={h} (video {vid_w}x{vid_h})")
-
-    if w <= 0 or h <= 0:
-        raise RuntimeError(f"Invalid delogo bbox after clamping: w={w} h={h}")
-
-    update_status(r, job_id, "processing", progress=20)
-
-    if is_cancelled(r, job_id):
-        raise JobCancelledError()
-
-    # Step 2: blur the watermark region and overlay it on the original video
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    blur_filter = (
-        f"[0:v]split[main][copy];"
-        f"[copy]crop={w}:{h}:{x}:{y},boxblur=20:5[blurred];"
-        f"[main][blurred]overlay={x}:{y}[out]"
-    )
-    total_seconds = max(total_frames / max(info["fps"], 1), 1)
-
-    if sys.platform == "darwin":
-        video_codec = ["-c:v", "h264_videotoolbox", "-b:v", "8000k"]
-    else:
-        video_codec = ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
-
-    proc = subprocess.Popen(
-        [
-            "ffmpeg", "-y", "-i", video_path,
-            "-filter_complex", blur_filter,
-            "-map", "[out]",
-            "-map", "0:a?",
-            *video_codec,
-            "-c:a", "copy",
-            "-pix_fmt", "yuv420p",
-            "-progress", "pipe:2",
-            output_path,
-        ],
-        stderr=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
-    )
-
-    import queue
-    import threading
-
-    stderr_lines = []
-    line_queue: queue.Queue = queue.Queue()
-
-    def _read_stderr():
-        try:
-            for raw in proc.stderr:
-                line_queue.put(raw)
-        finally:
-            line_queue.put(None)  # sentinel
-
-    reader = threading.Thread(target=_read_stderr, daemon=True)
-    reader.start()
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 
     try:
-        while True:
-            try:
-                raw_line = line_queue.get(timeout=0.5)
-            except queue.Empty:
-                if proc.poll() is not None:
+        cap = cv2.VideoCapture(video_path)
+        out = cv2.VideoWriter(temp_path, fourcc, fps, (width, height))
+
+        try:
+            current_bbox = None
+            frame_idx = 0
+
+            while True:
+                ret, frame = cap.read()
+                if not ret:
                     break
-                continue
 
-            if raw_line is None:
-                break
+                # Re-run detection once per second of video
+                if frame_idx % detection_interval == 0:
+                    if is_cancelled(r, job_id):
+                        raise JobCancelledError()
+                    current_bbox = _detect_bbox(frame, detector, width, height)
+                    if current_bbox:
+                        log.info(
+                            f"Job {job_id[:8]}… frame {frame_idx}: "
+                            f"watermark at {current_bbox}"
+                        )
 
-            line = raw_line.decode(errors="replace").strip()
-            stderr_lines.append(line)
-            if line.startswith("out_time_ms="):
-                try:
-                    current_s = int(line.split("=")[1]) / 1_000_000
-                    pct = 20 + int((current_s / total_seconds) * 80)
-                    update_status(r, job_id, "processing", progress=min(pct, 99))
-                except ValueError:
-                    pass
-            if is_cancelled(r, job_id):
-                proc.kill()
-                proc.wait()
-                raise JobCancelledError()
-    except (KeyboardInterrupt, SystemExit):
-        proc.kill()
-        proc.wait()
-        raise
+                # Blur the watermark region only when detected
+                if current_bbox is not None:
+                    x, y, w, h = current_bbox
+                    roi = frame[y:y + h, x:x + w]
+                    if roi.size > 0:
+                        frame[y:y + h, x:x + w] = cv2.GaussianBlur(roi, BLUR_KERNEL, 0)
 
-    proc.wait()
-    if proc.returncode != 0:
-        err = "\n".join(stderr_lines[-30:])
-        raise RuntimeError(f"FFmpeg blur failed: {err}")
+                out.write(frame)
+                frame_idx += 1
+
+                # Update progress every 150 frames (~5 seconds at 30fps)
+                if frame_idx % 150 == 0:
+                    pct = 5 + int((frame_idx / total_frames) * 83)
+                    update_status(r, job_id, "processing", progress=min(pct, 88))
+
+        finally:
+            cap.release()
+            out.release()
+
+        # Re-encode temp video + copy audio from original
+        update_status(r, job_id, "processing", progress=90)
+
+        if sys.platform == "darwin":
+            video_codec = ["-c:v", "h264_videotoolbox", "-b:v", "8000k"]
+        else:
+            video_codec = ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
+
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", temp_path,
+                "-i", video_path,
+                "-map", "0:v",
+                "-map", "1:a?",
+                *video_codec,
+                "-c:a", "copy",
+                "-pix_fmt", "yuv420p",
+                output_path,
+            ],
+            capture_output=True,
+            timeout=7200,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"FFmpeg re-encode failed: "
+                f"{result.stderr.decode(errors='replace')[-500:]}"
+            )
+
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
     log.info(f"Job {job_id[:8]}… complete — saved to {output_path}")
 
