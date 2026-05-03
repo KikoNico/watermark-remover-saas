@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 
@@ -173,13 +174,18 @@ def process_job(
     )
     total_seconds = max(total_frames / max(info["fps"], 1), 1)
 
+    if sys.platform == "darwin":
+        video_codec = ["-c:v", "h264_videotoolbox", "-b:v", "8000k"]
+    else:
+        video_codec = ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
+
     proc = subprocess.Popen(
         [
             "ffmpeg", "-y", "-i", video_path,
             "-filter_complex", blur_filter,
             "-map", "[out]",
             "-map", "0:a?",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            *video_codec,
             "-c:a", "copy",
             "-pix_fmt", "yuv420p",
             "-progress", "pipe:2",
