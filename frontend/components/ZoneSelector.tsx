@@ -170,18 +170,15 @@ export default function ZoneSelector({ frames, videoWidth, videoHeight, onConfir
             onMouseDown={(e) => { e.stopPropagation(); if (z.state === 'saved') editZone(z.id) }}
             title={z.state === 'saved' ? 'Clic para editar' : undefined}
           >
-            <img
-              src={currentFrame}
-              alt=""
-              draggable={false}
+            <div
               style={{
                 position: 'absolute',
-                left: -z.x,
-                top: -z.y,
-                width: imgWidth,
-                height: imgHeight,
+                inset: 0,
+                backgroundImage: `url(${currentFrame})`,
+                backgroundPosition: `-${z.x}px -${z.y}px`,
+                backgroundSize: `${imgWidth}px ${imgHeight}px`,
+                backgroundRepeat: 'no-repeat',
                 filter: `blur(${z.blur * 0.4}px)`,
-                pointerEvents: 'none',
               }}
             />
           </div>
