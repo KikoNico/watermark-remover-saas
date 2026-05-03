@@ -3,15 +3,20 @@
 import { useRef, useState, MouseEvent } from 'react'
 import { Zone } from '@/lib/api'
 
+interface DisplayZone {
+  id: number
+  x: number
+  y: number
+  w: number
+  h: number
+  blur: number
+}
+
 interface DrawingState {
   startX: number
   startY: number
   curX: number
   curY: number
-}
-
-interface DisplayZone extends Zone {
-  id: number
 }
 
 interface Props {
@@ -22,10 +27,14 @@ interface Props {
   loading?: boolean
 }
 
+const DEFAULT_BLUR = 20
+
 export default function ZoneSelector({ frameUrl, videoWidth, videoHeight, onConfirm, loading }: Props) {
   const imgRef = useRef<HTMLImageElement>(null)
+  const [imgWidth, setImgWidth] = useState(0)
   const [zones, setZones] = useState<DisplayZone[]>([])
   const [drawing, setDrawing] = useState<DrawingState | null>(null)
+  const [activeId, setActiveId] = useState<number | null>(null)
   const nextId = useRef(0)
 
   function getRelativeCoords(e: MouseEvent): { x: number; y: number } {
@@ -40,6 +49,7 @@ export default function ZoneSelector({ frameUrl, videoWidth, videoHeight, onConf
 
   function onMouseDown(e: MouseEvent) {
     e.preventDefault()
+    setActiveId(null)
     const { x, y } = getRelativeCoords(e)
     setDrawing({ startX: x, startY: y, curX: x, curY: y })
   }
@@ -58,13 +68,20 @@ export default function ZoneSelector({ frameUrl, videoWidth, videoHeight, onConf
     const w = Math.abs(x - drawing.startX)
     const h = Math.abs(y - drawing.startY)
     if (w > 10 && h > 10) {
-      setZones((prev) => [...prev, { id: nextId.current++, x: minX, y: minY, w, h }])
+      const id = nextId.current++
+      setZones((prev) => [...prev, { id, x: minX, y: minY, w, h, blur: DEFAULT_BLUR }])
+      setActiveId(id)
     }
     setDrawing(null)
   }
 
   function removeZone(id: number) {
     setZones((prev) => prev.filter((z) => z.id !== id))
+    setActiveId(null)
+  }
+
+  function updateBlur(id: number, blur: number) {
+    setZones((prev) => prev.map((z) => (z.id === id ? { ...z, blur } : z)))
   }
 
   function handleConfirm() {
@@ -73,14 +90,18 @@ export default function ZoneSelector({ frameUrl, videoWidth, videoHeight, onConf
     const rect = img.getBoundingClientRect()
     const scaleX = videoWidth / rect.width
     const scaleY = videoHeight / rect.height
-    const videoZones: Zone[] = zones.map((z) => ({
-      x: Math.round(z.x * scaleX),
-      y: Math.round(z.y * scaleY),
-      w: Math.round(z.w * scaleX),
-      h: Math.round(z.h * scaleY),
-    }))
-    onConfirm(videoZones)
+    onConfirm(
+      zones.map((z) => ({
+        x: Math.round(z.x * scaleX),
+        y: Math.round(z.y * scaleY),
+        w: Math.round(z.w * scaleX),
+        h: Math.round(z.h * scaleY),
+        blur: z.blur,
+      }))
+    )
   }
+
+  const activeZone = zones.find((z) => z.id === activeId) ?? null
 
   const drawRect = drawing
     ? {
@@ -93,6 +114,7 @@ export default function ZoneSelector({ frameUrl, videoWidth, videoHeight, onConf
 
   return (
     <div className="space-y-4">
+      {/* Frame + zones overlay */}
       <div
         className="relative w-full cursor-crosshair select-none"
         onMouseDown={onMouseDown}
@@ -106,27 +128,41 @@ export default function ZoneSelector({ frameUrl, videoWidth, videoHeight, onConf
           alt="Frame del vídeo"
           className="w-full rounded-lg block"
           draggable={false}
+          onLoad={() => setImgWidth(imgRef.current?.getBoundingClientRect().width ?? 0)}
         />
 
+        {/* Existing zones — show blurred preview */}
         {zones.map((z) => (
           <div
             key={z.id}
-            className="absolute border-2 border-blue-400 bg-blue-400/20"
+            className={`absolute overflow-hidden cursor-pointer border-2 transition-colors ${
+              z.id === activeId ? 'border-yellow-400' : 'border-blue-400'
+            }`}
             style={{ left: z.x, top: z.y, width: z.w, height: z.h }}
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              setActiveId(z.id)
+            }}
           >
-            <button
-              className="absolute -top-3 -right-3 bg-red-500 hover:bg-red-400 rounded-full w-6 h-6 text-white text-sm flex items-center justify-center leading-none"
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation()
-                removeZone(z.id)
-              }}
-            >
-              ×
-            </button>
+            {imgWidth > 0 && (
+              <img
+                src={frameUrl}
+                alt=""
+                draggable={false}
+                style={{
+                  position: 'absolute',
+                  left: -z.x,
+                  top: -z.y,
+                  width: imgWidth,
+                  filter: `blur(${z.blur * 0.4}px)`,
+                  pointerEvents: 'none',
+                }}
+              />
+            )}
           </div>
         ))}
 
+        {/* Zone being drawn */}
         {drawRect && (
           <div
             className="absolute border-2 border-dashed border-yellow-400 bg-yellow-400/10 pointer-events-none"
@@ -135,11 +171,40 @@ export default function ZoneSelector({ frameUrl, videoWidth, videoHeight, onConf
         )}
       </div>
 
-      <p className="text-sm text-gray-400">
-        {zones.length === 0
-          ? 'Arrastra sobre la imagen para marcar las zonas donde aparece la marca de agua'
-          : `${zones.length} zona${zones.length > 1 ? 's' : ''} marcada${zones.length > 1 ? 's' : ''} — puedes añadir más`}
-      </p>
+      {/* Controls for selected zone */}
+      {activeZone ? (
+        <div className="rounded-lg border border-gray-700 bg-gray-900 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-white">Intensidad del desenfoque</span>
+            <button
+              onClick={() => removeZone(activeZone.id)}
+              className="text-xs text-red-400 hover:text-red-300 transition-colors"
+            >
+              Eliminar zona
+            </button>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-gray-500">Suave</span>
+            <input
+              type="range"
+              min={2}
+              max={50}
+              value={activeZone.blur}
+              onChange={(e) => updateBlur(activeZone.id, Number(e.target.value))}
+              className="flex-1 accent-blue-500"
+            />
+            <span className="text-xs text-gray-500">Fuerte</span>
+            <span className="text-xs text-gray-400 w-6 text-right">{activeZone.blur}</span>
+          </div>
+          <p className="text-xs text-gray-500">La vista previa se actualiza en tiempo real sobre el frame</p>
+        </div>
+      ) : (
+        <p className="text-sm text-gray-400">
+          {zones.length === 0
+            ? 'Arrastra para marcar zonas donde aparece la marca de agua'
+            : `${zones.length} zona${zones.length > 1 ? 's' : ''} — haz clic en una para ajustar su desenfoque`}
+        </p>
+      )}
 
       <button
         onClick={handleConfirm}

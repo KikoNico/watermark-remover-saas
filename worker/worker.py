@@ -148,7 +148,8 @@ def _process_with_zones(
     n = len(clean_zones)
     parts = [f"[0:v]split={n + 1}" + "".join(f"[s{i}]" for i in range(n + 1))]
     for i, z in enumerate(clean_zones):
-        parts.append(f"[s{i + 1}]crop={z['w']}:{z['h']}:{z['x']}:{z['y']},boxblur=20:5[b{i}]")
+        blur = z.get("blur", 20)
+        parts.append(f"[s{i + 1}]crop={z['w']}:{z['h']}:{z['x']}:{z['y']},boxblur={blur}:5[b{i}]")
     for i, z in enumerate(clean_zones):
         src = "s0" if i == 0 else f"t{i - 1}"
         dst = f"t{i}" if i < n - 1 else "out"

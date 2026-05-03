@@ -27,6 +27,7 @@ export interface Zone {
   y: number
   w: number
   h: number
+  blur: number
 }
 
 export async function getJobFrame(

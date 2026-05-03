@@ -13,6 +13,7 @@ class Zone(BaseModel):
     y: int
     w: int
     h: int
+    blur: int = 20
 
 
 class StartJobRequest(BaseModel):
